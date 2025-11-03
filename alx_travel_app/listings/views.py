@@ -1,8 +1,14 @@
-from rest_framework import viewsets
+from rest_framework import viewsets, status
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
-from .serializers import UserSerializer, BookingSerializer, ListingSerializer
+from rest_framework.response import Response
+from .serializers import UserSerializer, BookingSerializer, ListingSerializer, PaymentSerializer
 from .models import User, Booking, Listing, Review
 from .permissions import IsGuestForBooking, IsHostForListing
+import requests
+import json
+import uuid
+import alx_travel_app.settings as settings
 
 
 class ListingViewSets(viewsets.ModelViewSet):
@@ -51,3 +57,64 @@ class ReviewViewSets(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsGuestForBooking])
+def initiate_payment(request, format=None):
+    """Initiate Chapa checkout"""
+    # Ensure booking_id is part of body
+    booking_id = request.data.get("booking")
+    if not booking_id:
+        return Response({"error": "booking id required"},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    # Retrieve booking with provided id
+    try:
+        booking = Booking.objects.only(
+            "total_price").get(booking_id=booking_id)
+    except Booking.DoesNotExist as e:
+        return Response({"error": "booking not found"},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    # Define parameters for API call
+    url = "https://api.chapa.co/v1/transaction/initialize"
+    secret_key = settings.env('CHAPA_SECRET_KEY')
+    tx_ref = uuid.uuid4()
+    amount = booking.total_price
+
+    payload = {
+        "amount": str(amount),
+        "currency": "USD",
+        "tx_ref": str(tx_ref),
+    }
+    headers = {
+        "Authorization": f"Bearer {secret_key}",
+        "Content-Type": "application/json"
+    }
+
+    # API call
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response_data = response.json()
+    except requests.RequestException as exc:
+        return Response({"error": "payment provider unreachable"},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except ValueError:
+        return Response({"error": "invalid response from payment provider"},
+                        status=status.HTTP_502_BAD_GATEWAY)
+
+    # Catch request failure
+    if response_data.get("status") == "failed":
+        return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
+
+    # Save payment to database
+    serializer = PaymentSerializer(data={
+        **request.data,
+        "tx_ref": tx_ref,
+        "amount": amount,
+    })
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
