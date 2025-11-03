@@ -80,6 +80,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         fields = [
             'payment_id',
             'booking',
+            'tx_ref',
             'amount',
             'status',
             'created_at',

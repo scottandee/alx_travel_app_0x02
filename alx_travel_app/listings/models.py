@@ -103,12 +103,12 @@ class Payment(models.Model):
     class PaymentStatus(models.TextChoices):
         PENDING = 'pending'
         SUCCESS = 'success'
-        CANCELLED = 'cancelled'
+        FAILED = 'failed'
     payment_id = models.UUIDField(
         primary_key=True,
         default=uuid.uuid4,
         editable=False)
-    tx_ref = models.UUIDField(unique=True, default=uuid.uuid4, editable=False)
+    tx_ref = models.UUIDField(unique=True)
     booking = models.ForeignKey(
         Booking,
         related_name='payments',
